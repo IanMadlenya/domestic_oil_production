@@ -4,6 +4,10 @@ README for Oil Production Analysis Project
 
 This project contains R code for estimating a mathematical model to fit
 the relationship between rig counts and subsequent crude oil production.
+The following companion article on Seeking Alpha describes the 
+model and the results implied by it:
+
+  http://seekingalpha.com/article/3667716-what-do-models-say-about-us-crude-oil-production
 
 The model is based on the following assumptions:
 
