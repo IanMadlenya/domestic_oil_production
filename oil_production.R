@@ -516,3 +516,202 @@ plot_top_models <- function (bheia, bheia.models) {
   p
   
 }
+
+plot_by_year <- function (DF, colname, start_date=as.Date("2011-01-01"), 
+    end_date=as.Date("2015-12-31"), mean_window=4) {
+    library(ggplot2)
+    library(scales)
+    DF$Value <- rollapply(DF[,colname], mean_window, mean, align="right", fill=NA)
+    DF <- DF[index(DF) >= start_date & index(DF) <= end_date,]
+    Dates <- index(DF)
+    DF <- as.data.frame(DF)
+    DF$Date <- Dates
+    DF$Year <- format(DF$Date, "%Y")
+#    DF$Jdate <- as.numeric(format(DF$Date, "%j"))
+    Jdate <- as.Date(sapply(DF$Date, function(d)
+        as.Date(sprintf("2015%s", format(d, "%m%d")), "%Y%m%d")
+    ))
+    DF$Jdate <- Jdate
+    p <- ggplot(data=DF, aes(x=Jdate, y=Value, colour=Year)) + geom_line(size=1) +
+        scale_x_date(labels = date_format("%b"))
+    p
+}
+
+plot_net_imports_by_year <- function (bheia,
+    start_date=as.Date("2011-01-01"), 
+    end_date=as.Date("2015-12-31"), mean_window=4) {
+    p <- plot_by_year(bheia, "net_imports", 
+        start_date = start_date,
+        end_date = end_date,
+        mean_window = mean_window)
+    p + ggtitle("Net Imports by Year") + ylab("Thousands of Barrels per Day") +
+        xlab("")
+}
+
+plot_refinery_inputs_by_year <- function (bheia,
+    start_date=as.Date("2011-01-01"), 
+    end_date=as.Date("2015-12-31"), mean_window=4) {
+    p <- plot_by_year(bheia, "refinery_inputs", 
+        start_date = start_date,
+        end_date = end_date,
+        mean_window = mean_window)
+    p + ggtitle("Refinery Inputs by Year") + ylab("Thousands of Barrels per Day") +
+        xlab("")
+}
+
+plot_eia_adjustment <- function (eia,
+    start_date=as.Date("2011-01-01"), 
+    end_date=as.Date("2015-12-31")
+) {
+    eia <- eia[index(eia) >= start_date & index(eia) <= end_date,]
+    eiadf <- as.data.frame(eia)
+    eiadf$Date <- index(eia)
+    p <- ggplot(data=eiadf, aes(x=Date, y=adjustment)) + geom_line(size=1) +
+        ggtitle("Adjustment (Unaccounted for Crude Oil)") +
+            xlab("") + ylab("Thousand of Barrels per Day")
+    
+        
+    p
+}
+
+summarize_net_imports_by_year <- function(DF, ...) {
+    summarize_eia_data_by_year(eia, "net_imports", ...)
+}
+
+
+summarize_refinery_inputs_by_year <- function(DF, ...) {
+    summarize_eia_data_by_year(eia, "refinery_inputs", ...)
+}
+
+summarize_eia_data_by_year <- function(DF, colname, 
+    start_date=as.Date("2010-11-01"), nyear=5) {
+    start_year <- as.numeric(format(start_date, "%Y"))
+    start_md <- format(start_date, "%m%d")
+    cutoff_dates <- as.Date(sapply((0:nyear) + start_year, 
+        function(y) as.Date(sprintf("%d%s", y, start_md), "%Y%m%d")))
+#    cutoff_dates <- (0:nyear)*365 + start_date
+    DF <- DF[index(DF) >= cutoff_dates[1] & index(DF) <= cutoff_dates[length(cutoff_dates)],]
+    Dates <- index(DF)
+    DF <- as.data.frame(DF)
+    DF$Date <- Dates
+    DF$Year <- format(DF$Date, "%Y")
+    DF$year_index <- findInterval(DF$Date, cutoff_dates)
+    DF$value <- DF[,colname]
+    DF$prior_year_value <- c(rep(NA, 52), DF$value[1:(nrow(DF) - 52)])
+
+    mean_str <- sprintf("mean(%s)", colname)
+    cat(sprintf("%-25s %6s %20s %10s %10s %10s\n", "Period", "Nobs", mean_str, "Y/Y Growth", 
+      "LM Growth", "LM stderr"))
+     
+    date_format = "%m/%d/%y"
+    for (i in 1:nyear) {
+        period_str <- sprintf("%s - %s", 
+            format(cutoff_dates[i], date_format), format(cutoff_dates[i+1]-1, date_format))
+        dfp <- DF[DF$year_index == i,]
+        meanval <- mean(dfp$value, na.rm=TRUE)
+        cat(sprintf("%-25s %6d %20.0f ", period_str, nrow(dfp), meanval))
+        if (i > 1) {
+            yoy_growth <- (meanval / prior_meanval - 1) * 100.0
+            vlm <- summary(lm(value ~ prior_year_value + 0, dfp))
+            lm_growth <- (coef(vlm)[1] - 1) * 100.0
+            lm_stderr <- coef(vlm)[2] * 100.0
+            cat(sprintf("%10.2f %10.2f %10.2f\n", yoy_growth, lm_growth, lm_stderr))
+        } else {
+            cat("\n")
+        }
+        prior_meanval <- meanval
+    }
+    
+    mean1 <- mean(DF$value[DF$year_index == 1])
+    meanN <- mean(DF$value[DF$year_index == nyear])
+    cag <- 100.0 * (exp(log(meanN/mean1) / (nyear-1)) - 1.0)
+    tlm <- summary(lm(value ~ prior_year_value + 0, DF))
+    tlm_growth <- (coef(tlm)[1] - 1) * 100.0
+    tlm_stderr <- coef(tlm)[2] * 100.0
+    
+    cat(sprintf("%-25s %6d %20.0f %10.2f %10.2f %10.2f\n",
+        "Total", nrow(DF), mean(DF$value, na.rm=TRUE), cag, tlm_growth, tlm_stderr))        
+}
+
+plot_forecasts <- function (df1, df2, colname, 
+    forecast_start = as.Date("2015-11-20"),
+    start_date=as.Date("2015-01-01"), 
+    window_size=1) {
+    df1 <- as.data.frame(df1)
+    df2 <- as.data.frame(df2)
+    df1$date <- as.Date(df1$date)
+    df2$date <- as.Date(df2$date)
+    df1.a <- df1[df1$date <= forecast_start,c("date",colname)]
+    if (window_size > 1) {
+        df1.a[,2] <- rollapply(df1.a[,2],4,mean,align="right",fill=NA)
+    }
+    df1.a <- df1.a[df1.a$date >= start_date,]
+    df1.b <- df1[df1$date >= forecast_start, c("date", colname)]
+    df2.b <- df2[df2$date >= forecast_start, c("date", colname)]
+    df1.a$Series = "Historical"
+    df1.b$Series = "Conservative"
+    df2.b$Series = "Baseline"
+    df <- rbind(df1.a, df1.b, df2.b)
+    colnames(df) <- c("Date", "Value", "Series")
+    options(scipen=3)
+    p <- ggplot(data=df, aes(x=Date, y=Value, colour=Series)) + geom_line(size=1) +
+        scale_x_date(labels = date_format("%b %y")) + xlab("") +
+        ylab("Thousands of Barrels Per Day")
+    p
+}
+
+plot_production_forecasts <- function (df1, df2, forecast_start = as.Date("2015-11-20")) {
+    p <- plot_forecasts(df1, df2, "production", forecast_start) +
+        ggtitle("Forecast Crude Oil Production")
+    p
+}
+
+plot_net_imports_forecasts <- function (df1, df2, forecast_start = as.Date("2015-11-20")) {
+    p <- plot_forecasts(df1, df2, "net_imports", forecast_start, window_size=4) +
+        ggtitle("Forecast Net Imports of Crude Oil")
+    p
+}
+  
+plot_adjustment_forecasts <- function (df1, df2, forecast_start = as.Date("2015-11-20")) {
+    p <- plot_forecasts(df1, df2, "adjustment", forecast_start) +
+        ggtitle("Forecast Adjustment (Unaccounted for Crude Oil)")
+    p
+}
+
+plot_refinery_inputs_forecasts <- function (df1, df2, forecast_start = as.Date("2015-11-20")) {
+    p <- plot_forecasts(df1, df2, "refinery_inputs", forecast_start) +
+        ggtitle("Forecast Refinery Inputs")
+    p
+}
+
+plot_crude_stocks_forecasts <- function (df1, df2, forecast_start = as.Date("2015-11-20")) {
+    p <- plot_forecasts(df1, df2, "crude_stocks", forecast_start) +
+        ggtitle("Forecast Crude Stocks")
+    p
+}
+  
+plot_and_save_all_forecasts <- function (forecast_source = "forecasts_20151125.xlsx",
+    dir = ".") {
+    fc1 <- read_excel("forecasts_20151125.xlsx",sheet=1)
+    fc2 <- read_excel("forecasts_20151125.xlsx",sheet=2)
+    
+    png(sprintf("%s/%s", dir, "../production_forecasts.png"),height=240)
+    print(plot_production_forecasts(fc1, fc2))
+    dev.off()
+    
+    png(sprintf("%s/%s", dir, "../net_imports_forecast.png"), height=240)
+    print(plot_net_imports_forecasts(fc1, fc2))
+    dev.off()
+    
+    png(sprintf("%s/%s", dir, "../adjustment_forecast.png"), height=240)
+    print(plot_adjustment_forecasts(fc1, fc2))
+    dev.off()
+    
+    png(sprintf("%s/%s", dir, "../refinery_inputs_forecasts.png"), height=240)
+    print(plot_refinery_inputs_forecasts(fc1, fc2))
+    dev.off()
+    
+    png(sprintf("%s/%s", dir, "../crude_stocks_forecasts.png"), height=240)
+    print(plot_crude_stocks_forecasts(fc1, fc2))
+    dev.off()
+}
